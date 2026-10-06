@@ -1115,6 +1115,42 @@ Program Behavior
     Enable the builtin script that provides various keybindings to pan videos
     and images (default: yes).
 
+``--load-sub-editor=<yes|no>``
+    Enable the builtin script that lets you edit subtitles in place (default:
+    yes). Double-clicking a text subtitle pauses playback and turns it into a
+    text box. ``Enter`` or clicking outside the text box applies the edit
+    (a click outside only closes the right-click menu if it is open),
+    ``Shift+Enter`` inserts a ``\N``
+    line break, ``Esc`` cancels and ``Tab`` switches between the subtitle
+    events shown at the same time. Selection with the mouse or ``Shift`` and
+    the arrow keys, ``Ctrl+A/C/X/V`` and ``Ctrl+Z/Y`` work as usual. A right
+    click opens a menu to make the selection bold, italic or underlined
+    (``Ctrl+B/I/U``), using ASS tags that become ``<b>``/``<i>``/``<u>`` in
+    SRT files. For ASS subtitles the menu also lets you change the style of
+    the line. The menu can also delete the line (after a confirmation).
+
+    The text box hides override tags: bold, italic, underline and strikeout
+    are shown as formatting, and other tag blocks (like ``{\pos(...)}``) as a
+    small ``{…}`` marker that the cursor skips and deleting text keeps.
+    ``Ctrl+T`` switches to showing the raw text with all tags.
+
+    Every confirmed edit is saved to ``<name>.edited.<ext>`` next to the
+    subtitle file (ASS and SRT). Embedded tracks are first extracted with
+    ffmpeg to ``<video>.edited.<ext>``. When a video is opened and an
+    ``.edited`` file exists for its subtitle, it is loaded and selected
+    instead of the original. The script is configured
+    with ``--script-opts=sub_editor-<option>=<value>``; see the options at the
+    top of ``player/lua/sub_editor.lua``.
+
+``--load-sub-list=<yes|no>``
+    Enable the builtin script that shows all lines of the current subtitle
+    track in a panel on the right (default: yes). It's toggled by tapping
+    ``Alt`` twice (``ALT_TAP``), or with ``script-binding sub_list/toggle``.
+    Lines are shown without tags and line breaks; clicking one seeks to it.
+    The video is shrunk to the left of the panel while it's open. Configured
+    with ``--script-opts=sub_list-<option>=<value>``; see the options at the
+    top of ``player/lua/sub_list.lua``.
+
 ``--player-operation-mode=<cplayer|pseudo-gui>``
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but

@@ -196,6 +196,8 @@ typedef struct MPOpts {
     int lua_load_auto_profiles;
     bool lua_load_select;
     bool lua_load_positioning;
+    bool lua_load_sub_editor;
+    bool lua_load_sub_list;
     bool lua_load_commands;
     bool lua_load_context_menu;
 

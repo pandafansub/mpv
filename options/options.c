@@ -582,6 +582,8 @@ static const m_option_t mp_opts[] = {
         .flags = UPDATE_BUILTIN_SCRIPTS},
     {"load-select", OPT_BOOL(lua_load_select), .flags = UPDATE_BUILTIN_SCRIPTS},
     {"load-positioning", OPT_BOOL(lua_load_positioning), .flags = UPDATE_BUILTIN_SCRIPTS},
+    {"load-sub-editor", OPT_BOOL(lua_load_sub_editor), .flags = UPDATE_BUILTIN_SCRIPTS},
+    {"load-sub-list", OPT_BOOL(lua_load_sub_list), .flags = UPDATE_BUILTIN_SCRIPTS},
     {"load-commands", OPT_BOOL(lua_load_commands), .flags = UPDATE_BUILTIN_SCRIPTS},
     {"load-context-menu", OPT_BOOL(lua_load_context_menu), .flags = UPDATE_BUILTIN_SCRIPTS},
 #endif
@@ -1034,6 +1036,8 @@ static const struct MPOpts mp_default_opts = {
     .lua_load_auto_profiles = -1,
     .lua_load_select = true,
     .lua_load_positioning = true,
+    .lua_load_sub_editor = true,
+    .lua_load_sub_list = true,
     .lua_load_commands = true,
 #ifndef _WIN32
     .lua_load_context_menu = true,
