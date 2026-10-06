@@ -1,0 +1,7 @@
+add `sub-edit`, `sub-delete`, `sub-event-bounds` and `sub-styles` commands
+add `--load-sub-editor` option and the builtin `sub_editor.lua` script to edit subtitles in place
+add `--load-sub-list` option and the builtin `sub_list.lua` script listing all subtitle lines
+add `SHIFT_TAP`, `CTRL_TAP` and `ALT_TAP` keys for a modifier pressed and released on its own (win32)
+combine dead keys with the next key while text input is active (win32)
+change default bindings: `a`/`d` seek to the previous/next subtitle, deinterlace moves to `D`
+change `osc-scalewindowed` and `osc-scalefullscreen` defaults to 0.8

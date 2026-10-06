@@ -1846,6 +1846,14 @@ bool mp_input_use_alt_gr(struct input_ctx *ictx)
     return r;
 }
 
+bool mp_input_text_input_active(struct input_ctx *ictx)
+{
+    input_lock(ictx);
+    bool r = find_any_bind_for_key(ictx, (bstr){0}, MP_KEY_ANY_UNICODE);
+    input_unlock(ictx);
+    return r;
+}
+
 bool mp_input_use_media_keys(struct input_ctx *ictx)
 {
     input_lock(ictx);

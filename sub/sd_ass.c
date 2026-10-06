@@ -41,6 +41,18 @@
 #include "packer.h"
 #include "sd.h"
 
+// A user edit of an event's text and style (see SD_CTRL_EDIT_EVENT). Kept
+// around so it can be reapplied if the event is added to the track again (e.g.
+// after the track was flushed on seek).
+struct sub_edit {
+    long long start, duration;
+    int layer;
+    char *orig_text;
+    char *new_text;
+    char *new_style;    // NULL if the style wasn't changed
+    bool deleted;
+};
+
 struct sd_ass_priv {
     struct ass_library *ass_library;
     struct ass_renderer *ass_renderer;
@@ -61,6 +73,8 @@ struct sd_ass_priv {
     struct seen_packet *seen_packets;
     int num_seen_packets;
     bool check_animated;
+    struct sub_edit *edits;
+    int num_edits;
 };
 
 struct seen_packet {
@@ -99,6 +113,7 @@ const struct m_sub_options mp_sub_filter_opts = {
 
 static void mangle_colors(struct sd *sd, struct sub_bitmaps *parts);
 static void fill_plaintext(struct sd *sd, double pts);
+static long long find_timestamp(struct sd *sd, double pts);
 
 static const struct sd_filter_functions *const filters[] = {
     // Note: list order defines filter order.
@@ -366,6 +381,228 @@ static bool is_animated(const char *str)
     return false;
 }
 
+static void set_event_text(ASS_Event *event, const char *text)
+{
+    // libass owns event strings and releases them with free().
+    char *dup = strdup(text);
+    if (!dup)
+        return;
+    free(event->Text);
+    event->Text = dup;
+}
+
+// Index of the style with the given name, or -1. Like libass, the last style
+// with a name wins.
+static int find_style(ASS_Track *track, const char *name)
+{
+    for (int n = track->n_styles - 1; n >= 0; n--) {
+        if (track->styles[n].Name && !strcmp(track->styles[n].Name, name))
+            return n;
+    }
+    return -1;
+}
+
+// Removes event n from the track. libass only allows freeing the last event,
+// so move it there first.
+static void remove_event(ASS_Track *track, int n)
+{
+    ASS_Event ev = track->events[n];
+    memmove(&track->events[n], &track->events[n + 1],
+            (track->n_events - n - 1) * sizeof(ASS_Event));
+    track->events[track->n_events - 1] = ev;
+    ass_free_event(track, track->n_events - 1);
+    track->n_events--;
+}
+
+static void apply_edits(struct sd *sd, int first_event)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    ASS_Track *track = ctx->ass_track;
+    for (int n = first_event; n < track->n_events; n++) {
+        ASS_Event *event = &track->events[n];
+        if (!event->Text)
+            continue;
+        for (int i = 0; i < ctx->num_edits; i++) {
+            struct sub_edit *e = &ctx->edits[i];
+            if (e->start == event->Start && e->duration == event->Duration &&
+                e->layer == event->Layer && !strcmp(e->orig_text, event->Text))
+            {
+                if (e->deleted) {
+                    remove_event(track, n);
+                    n--;
+                    break;
+                }
+                set_event_text(event, e->new_text);
+                int style = e->new_style ? find_style(track, e->new_style) : -1;
+                if (style >= 0)
+                    event->Style = style;
+                break;
+            }
+        }
+    }
+}
+
+// Index in the track of the index-th event visible at pts, in the order used
+// by the sub-text/ass-full property, or -1.
+static int find_visible_event(struct sd *sd, double pts, int index)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    ASS_Track *track = ctx->ass_track;
+    if (pts == MP_NOPTS_VALUE)
+        return -1;
+    long long ipts = find_timestamp(sd, pts);
+    // Same iteration order as get_text_buf() with SD_TEXT_TYPE_ASS_FULL.
+    for (int n = 0; n < track->n_events; n++) {
+        ASS_Event *ev = &track->events[n];
+        if (ipts >= ev->Start && ipts < ev->Start + ev->Duration && ev->Text) {
+            if (index-- == 0)
+                return n;
+        }
+    }
+    return -1;
+}
+
+// The edit record of an event, created if it wasn't edited before.
+static struct sub_edit *get_edit(struct sd_ass_priv *ctx, ASS_Event *event)
+{
+    for (int i = 0; i < ctx->num_edits; i++) {
+        struct sub_edit *e = &ctx->edits[i];
+        if (e->start == event->Start && e->duration == event->Duration &&
+            e->layer == event->Layer && !e->deleted &&
+            !strcmp(e->new_text, event->Text))
+            return e;
+    }
+    MP_TARRAY_GROW(ctx, ctx->edits, ctx->num_edits);
+    struct sub_edit *edit = &ctx->edits[ctx->num_edits++];
+    *edit = (struct sub_edit){
+        .start = event->Start,
+        .duration = event->Duration,
+        .layer = event->Layer,
+        .orig_text = talloc_strdup(ctx, event->Text),
+        .new_text = talloc_strdup(ctx, event->Text),
+    };
+    return edit;
+}
+
+static bool delete_event(struct sd *sd, struct sd_edit_event *arg)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    int n = find_visible_event(sd, arg->pts, arg->index);
+    if (n < 0)
+        return false;
+    struct sub_edit *edit = get_edit(ctx, &ctx->ass_track->events[n]);
+    // Kept so the event is removed again if it's added back to the track.
+    edit->deleted = true;
+    remove_event(ctx->ass_track, n);
+    return true;
+}
+
+static bool edit_event(struct sd *sd, struct sd_edit_event *arg)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    ASS_Track *track = ctx->ass_track;
+    if (arg->pts == MP_NOPTS_VALUE || !arg->text)
+        return false;
+    int style = -1;
+    if (arg->style && arg->style[0]) {
+        style = find_style(track, arg->style);
+        if (style < 0)
+            return false;
+    }
+    int n = find_visible_event(sd, arg->pts, arg->index);
+    if (n < 0)
+        return false;
+    ASS_Event *event = &track->events[n];
+
+    struct sub_edit *edit = get_edit(ctx, event);
+    talloc_free(edit->new_text);
+    edit->new_text = talloc_strdup(ctx, arg->text);
+    if (style >= 0) {
+        talloc_free(edit->new_style);
+        edit->new_style = talloc_strdup(ctx, arg->style);
+        event->Style = style;
+    }
+
+    set_event_text(event, arg->text);
+    return true;
+}
+
+static void get_styles(struct sd *sd, struct sd_styles *arg)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    ASS_Track *track = ctx->ass_track;
+    arg->styles = NULL;
+    arg->num_styles = 0;
+    for (int n = 0; n < track->n_styles; n++) {
+        ASS_Style *st = &track->styles[n];
+        if (!st->Name)
+            continue;
+        // Later styles with the same name replace earlier ones.
+        if (find_style(track, st->Name) != n)
+            continue;
+        struct sd_style_info info = {
+            .name = talloc_strdup(arg->ta_parent, st->Name),
+            .bold = st->Bold,
+            .italic = st->Italic,
+            .underline = st->Underline,
+            .strikeout = st->StrikeOut,
+        };
+        MP_TARRAY_APPEND(arg->ta_parent, arg->styles, arg->num_styles, info);
+    }
+}
+
+// Renders each event visible at pts on its own, to find where it is drawn.
+// Uses the renderer as configured by the last get_bitmaps() call.
+static bool event_bounds(struct sd *sd, struct sd_event_bounds *arg)
+{
+    struct sd_ass_priv *ctx = sd->priv;
+    ASS_Track *track = ctx->ass_track;
+    bool no_ass = !sd->opts->ass_enabled ||
+        sd->shared_opts->ass_style_override[sd->order] == ASS_STYLE_OVERRIDE_STRIP;
+    if (arg->pts == MP_NOPTS_VALUE || !ctx->ass_renderer ||
+        !ctx->ass_configured || no_ass)
+        return false;
+    long long ts = find_timestamp(sd, arg->pts);
+
+    int *active = NULL;
+    int num_active = 0;
+    for (int n = 0; n < track->n_events; n++) {
+        ASS_Event *ev = &track->events[n];
+        if (ts >= ev->Start && ts < ev->Start + ev->Duration && ev->Text)
+            MP_TARRAY_APPEND(NULL, active, num_active, n);
+    }
+    long long *durations = talloc_array(NULL, long long, num_active);
+    for (int i = 0; i < num_active; i++)
+        durations[i] = track->events[active[i]].Duration;
+
+    arg->rects = talloc_zero_array(arg->ta_parent, struct mp_rect, num_active);
+    arg->num_rects = num_active;
+    for (int i = 0; i < num_active; i++) {
+        // Hide all other events by making them zero-length.
+        for (int j = 0; j < num_active; j++)
+            track->events[active[j]].Duration = i == j ? durations[j] : 0;
+        struct mp_rect bb = {INT_MAX, INT_MAX, INT_MIN, INT_MIN};
+        for (ASS_Image *img = ass_render_frame(ctx->ass_renderer, track, ts, NULL);
+             img; img = img->next)
+        {
+            if (img->w <= 0 || img->h <= 0)
+                continue;
+            bb.x0 = MPMIN(bb.x0, img->dst_x);
+            bb.y0 = MPMIN(bb.y0, img->dst_y);
+            bb.x1 = MPMAX(bb.x1, img->dst_x + img->w);
+            bb.y1 = MPMAX(bb.y1, img->dst_y + img->h);
+        }
+        if (bb.x0 < bb.x1)
+            arg->rects[i] = bb;
+    }
+    for (int i = 0; i < num_active; i++)
+        track->events[active[i]].Duration = durations[i];
+
+    talloc_free(active);
+    talloc_free(durations);
+    return true;
+}
+
 // Note: pkt is not necessarily a fully valid refcounted packet.
 static void filter_and_add(struct sd *sd, struct demux_packet *pkt)
 {
@@ -387,6 +624,9 @@ static void filter_and_add(struct sd *sd, struct demux_packet *pkt)
     ass_process_chunk(ctx->ass_track, pkt->buffer, pkt->len,
                       floor(pkt->pts * 1000 + 1e-6),
                       floor(pkt->duration * 1000 + 1e-6));
+
+    if (ctx->num_edits)
+        apply_edits(sd, old_n_events);
 
     // This bookkeeping only has any practical use for ASS subs
     // over a VO with no video.
@@ -1068,6 +1308,15 @@ static int control(struct sd *sd, enum sd_ctrl cmd, void *arg)
         a[0] += res / 1000.0 + SUB_SEEK_OFFSET;
         return true;
     }
+    case SD_CTRL_EDIT_EVENT:
+        return edit_event(sd, arg) ? CONTROL_OK : CONTROL_ERROR;
+    case SD_CTRL_DELETE_EVENT:
+        return delete_event(sd, arg) ? CONTROL_OK : CONTROL_ERROR;
+    case SD_CTRL_EVENT_BOUNDS:
+        return event_bounds(sd, arg) ? CONTROL_OK : CONTROL_ERROR;
+    case SD_CTRL_GET_STYLES:
+        get_styles(sd, arg);
+        return CONTROL_OK;
     case SD_CTRL_SET_ANIMATED_CHECK:
         ctx->check_animated = *(bool *)arg;
         return CONTROL_OK;

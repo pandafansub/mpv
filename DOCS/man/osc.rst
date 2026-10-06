@@ -266,12 +266,12 @@ Configurable Options
     Show the mpv logo when no video track is present or selected.
 
 ``scalewindowed``
-    Default: 1.0
+    Default: 0.8
 
     Scale factor of the OSC when windowed.
 
 ``scalefullscreen``
-    Default: 1.0
+    Default: 0.8
 
     Scale factor of the OSC when fullscreen
 

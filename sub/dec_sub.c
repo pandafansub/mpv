@@ -528,6 +528,23 @@ int sub_control(struct dec_sub *sub, enum sd_ctrl cmd, void *arg)
             a[0] = pts_from_subtitle(sub, arg2[0]);
         break;
     }
+    case SD_CTRL_EDIT_EVENT:
+    case SD_CTRL_DELETE_EVENT: {
+        struct sd_edit_event ev = *(struct sd_edit_event *)arg;
+        ev.pts = pts_to_subtitle(sub, ev.pts);
+        if (sub->sd->driver->control)
+            r = sub->sd->driver->control(sub->sd, cmd, &ev);
+        break;
+    }
+    case SD_CTRL_EVENT_BOUNDS: {
+        struct sd_event_bounds *b = arg;
+        double orig_pts = b->pts;
+        b->pts = pts_to_subtitle(sub, b->pts);
+        if (sub->sd->driver->control)
+            r = sub->sd->driver->control(sub->sd, cmd, b);
+        b->pts = orig_pts;
+        break;
+    }
     case SD_CTRL_UPDATE_OPTS: {
         uint64_t flags = *(uint64_t *)arg;
         if (m_config_cache_update(sub->opts_cache))

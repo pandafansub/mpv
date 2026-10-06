@@ -239,6 +239,11 @@ void mp_input_wakeup(struct input_ctx *ictx);
 // characters. If false, count Right Alt as the modifier Alt key.
 bool mp_input_use_alt_gr(struct input_ctx *ictx);
 
+// Whether something takes text input right now (a binding for ANY_UNICODE is
+// active, like the console or the subtitle editor). VOs can then combine
+// dead keys with the next key to produce accented characters.
+bool mp_input_text_input_active(struct input_ctx *ictx);
+
 // Return true if mpv should intercept keyboard media keys
 bool mp_input_use_media_keys(struct input_ctx *ictx);
 

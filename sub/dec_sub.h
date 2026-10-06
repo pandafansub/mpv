@@ -23,6 +23,41 @@ enum sd_ctrl {
     SD_CTRL_RESET_SOFT,
     SD_CTRL_UPDATE_OPTS,
     SD_CTRL_APPLY_DVDNAV,   // const struct stream_nav_state *
+    SD_CTRL_EDIT_EVENT,     // struct sd_edit_event *
+    SD_CTRL_DELETE_EVENT,   // struct sd_edit_event * (text and style unused)
+    SD_CTRL_EVENT_BOUNDS,   // struct sd_event_bounds *
+    SD_CTRL_GET_STYLES,     // struct sd_styles *
+};
+
+struct sd_style_info {
+    char *name;
+    bool bold, italic, underline, strikeout;
+};
+
+// Styles of the track, allocated with talloc under ta_parent.
+struct sd_styles {
+    void *ta_parent;
+    struct sd_style_info *styles;
+    int num_styles;
+};
+
+// Screen bounding boxes of the events visible at pts, in the same order as the
+// sub-text/ass-full property. Events that render nothing get an empty rect
+// (x0 == x1). rects is allocated with talloc under ta_parent.
+struct sd_event_bounds {
+    double pts;
+    void *ta_parent;
+    struct mp_rect *rects;
+    int num_rects;
+};
+
+// Replace the text (and optionally the style) of the index-th event visible at
+// pts (in the order used by the sub-text/ass-full property).
+struct sd_edit_event {
+    double pts;
+    int index;
+    const char *text;
+    const char *style;      // NULL or "" to keep the current style
 };
 
 enum sd_text_type {

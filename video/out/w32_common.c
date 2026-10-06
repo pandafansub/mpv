@@ -97,6 +97,16 @@ struct vo_w32_state {
 
     struct w32_api api; // stores functions from dynamically loaded DLLs
 
+    // Modifier key (VK_SHIFT/VK_CONTROL/VK_MENU) that is down with no other
+    // key or mouse button pressed since, or 0. Releasing it emits a *_TAP key.
+    UINT tap_vkey;
+
+    // Dead key waiting to be combined with the next key, while something
+    // takes text input (see decode_text_key()).
+    bool dead_pending;
+    UINT dead_vkey, dead_scancode;
+    BYTE dead_keys[256];
+
     HWND window;
     HWND parent; // 0 normally, set in embedding mode
     HHOOK parent_win_hook;
@@ -468,9 +478,102 @@ static bool handle_appcommand(struct vo_w32_state *w32, UINT cmd)
     return true;
 }
 
+static bool is_modifier_vkey(UINT vkey)
+{
+    return vkey == VK_SHIFT || vkey == VK_CONTROL || vkey == VK_MENU;
+}
+
+// For text input: like decode_key(), but a dead key is combined with the next
+// key by the keyboard layout (e.g. ´ then a gives á), as in other programs.
+// decode_key() can't do this, since it must be stateless for key bindings.
+// Returns the number of characters written to out (a dead key that doesn't
+// combine with the next key gives both characters), 0 if the key was a dead
+// key, or -1 if the key doesn't produce text.
+static int decode_text_key(struct vo_w32_state *w32, UINT vkey, UINT scancode,
+                           int out[2])
+{
+    if (is_modifier_vkey(vkey) || vkey == VK_CAPITAL)
+        return -1;
+
+    BYTE keys[256];
+    GetKeyboardState(keys);
+    // AltGr (LCONTROL+RMENU) is used for typing; other Ctrl and Alt
+    // combinations are shortcuts.
+    bool alt_gr = (keys[VK_RMENU] & 0x80) && (keys[VK_LCONTROL] & 0x80);
+    if (!alt_gr && ((keys[VK_CONTROL] & 0x80) || (keys[VK_MENU] & 0x80)))
+        return -1;
+
+    wchar_t buf[10] = { 0 };
+    clear_keyboard_buffer();
+    if (w32->dead_pending) {
+        ToUnicode(w32->dead_vkey, w32->dead_scancode, w32->dead_keys, buf,
+                  MP_ARRAY_SIZE(buf), 0);
+    }
+    int len = ToUnicode(vkey, scancode, keys, buf, MP_ARRAY_SIZE(buf), 0);
+    clear_keyboard_buffer();
+
+    if (len < 0) {
+        w32->dead_pending = true;
+        w32->dead_vkey = vkey;
+        w32->dead_scancode = scancode;
+        memcpy(w32->dead_keys, keys, sizeof(keys));
+        return 0;
+    }
+
+    int n = 0;
+    for (int i = 0; i < len && n < 2; i++) {
+        int c = buf[i];
+        if (i + 1 < len && IS_SURROGATE_PAIR(buf[i], buf[i + 1])) {
+            c = decode_surrogate_pair(buf[i], buf[i + 1]);
+            i++;
+        }
+        // Not text; a pending dead key still applies to the next key.
+        if (c < 0x20)
+            return -1;
+        out[n++] = c;
+    }
+    if (!n)
+        return -1;
+    w32->dead_pending = false;
+    return n;
+}
+
+// Track modifier keys pressed on their own, for MP_KEY_*_TAP.
+static void update_tap(struct vo_w32_state *w32, UINT vkey, UINT flags)
+{
+    if (!is_modifier_vkey(vkey)) {
+        w32->tap_vkey = 0;
+        return;
+    }
+    // Auto-repeat of a held modifier doesn't change anything.
+    if (flags & KF_REPEAT)
+        return;
+    static const UINT mods[] = {VK_SHIFT, VK_CONTROL, VK_MENU};
+    for (int n = 0; n < MP_ARRAY_SIZE(mods); n++) {
+        if (mods[n] != vkey && key_state(mods[n])) {
+            w32->tap_vkey = 0;
+            return;
+        }
+    }
+    w32->tap_vkey = vkey;
+}
+
 static void handle_key_down(struct vo_w32_state *w32, UINT vkey, UINT scancode)
 {
+    update_tap(w32, vkey, scancode);
+
     int mpkey = mp_w32_vkey_to_mpkey(vkey, scancode & KF_EXTENDED);
+    if (!mpkey && mp_input_text_input_active(w32->input_ctx)) {
+        int chars[2];
+        int n = decode_text_key(w32, vkey, scancode, chars);
+        if (n >= 0) {
+            for (int i = 0; i < n; i++)
+                mp_input_put_key(w32->input_ctx, chars[i] | mod_state(w32));
+            return;
+        }
+    } else if (!mpkey) {
+        w32->dead_pending = false;
+    }
     if (!mpkey) {
         mpkey = decode_key(w32, vkey, scancode & (0xff | KF_EXTENDED));
         if (!mpkey)
@@ -481,18 +584,28 @@ static void handle_key_down(struct vo_w32_state *w32, UINT vkey, UINT scancode)
     mp_input_put_key(w32->input_ctx, mpkey | mod_state(w32) | state);
 }
 
-static void handle_key_up(struct vo_w32_state *w32, UINT vkey, UINT scancode)
+// Returns true if the key-up completed a tap of a modifier key.
+static bool handle_key_up(struct vo_w32_state *w32, UINT vkey, UINT scancode)
 {
     switch (vkey) {
     case VK_MENU:
     case VK_CONTROL:
     case VK_SHIFT:
+        if (w32->tap_vkey == vkey) {
+            w32->tap_vkey = 0;
+            int key = vkey == VK_MENU    ? MP_KEY_ALT_TAP :
+                      vkey == VK_CONTROL ? MP_KEY_CTRL_TAP : MP_KEY_SHIFT_TAP;
+            mp_input_put_key(w32->input_ctx, key);
+            return true;
+        }
         break;
     default:
+        w32->tap_vkey = 0;
         // Releasing all keys on key-up is simpler and ensures no keys can be
         // get "stuck." This matches the behaviour of other VOs.
         mp_input_put_key(w32->input_ctx, MP_INPUT_RELEASE_ALL);
     }
+    return false;
 }
 
 static bool handle_char(struct vo_w32_state *w32, WPARAM wc, bool decode)
@@ -541,6 +654,7 @@ static bool should_ignore_mouse_event(const struct vo_w32_state *w32)
 
 static void handle_mouse_down(struct vo_w32_state *w32, int btn, int x, int y)
 {
+    w32->tap_vkey = 0;
     if (should_ignore_mouse_event(w32))
         return;
     btn |= mod_state(w32);
@@ -1563,7 +1677,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         break;
     case WM_SYSKEYUP:
     case WM_KEYUP:
-        handle_key_up(w32, wParam, HIWORD(lParam));
+        // A tap of Alt would otherwise activate the window menu, taking the
+        // keyboard away from mpv until another key is pressed.
+        if (handle_key_up(w32, wParam, HIWORD(lParam)) && wParam == VK_MENU)
+            return 0;
         if (wParam == VK_F10)
             return 0;
         break;
@@ -1585,10 +1702,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
     case WM_KILLFOCUS:
         mp_input_put_key(w32->input_ctx, MP_INPUT_RELEASE_ALL);
         w32->focused = false;
+        w32->tap_vkey = 0;
+        w32->dead_pending = false;
         signal_events(w32, VO_EVENT_FOCUS);
         return 0;
     case WM_SETFOCUS:
         w32->focused = true;
+        w32->tap_vkey = 0;
         signal_events(w32, VO_EVENT_FOCUS);
         return 0;
     case WM_SETCURSOR:
@@ -1645,9 +1765,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         handle_mouse_up(w32, MP_MBTN_RIGHT);
         break;
     case WM_MOUSEWHEEL:
+        w32->tap_vkey = 0;
         handle_mouse_wheel(w32, false, GET_WHEEL_DELTA_WPARAM(wParam));
         return 0;
     case WM_MOUSEHWHEEL:
+        w32->tap_vkey = 0;
         handle_mouse_wheel(w32, true, GET_WHEEL_DELTA_WPARAM(wParam));
         // Some buggy mouse drivers (SetPoint) stop delivering WM_MOUSEHWHEEL
         // events when the message loop doesn't return TRUE (even on Windows 7)
