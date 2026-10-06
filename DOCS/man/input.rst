@@ -764,6 +764,39 @@ Track Manipulation
     secondary
         Steps through the secondary subtitles.
 
+``sub-styles [<flags>]``
+    Return the styles of the current subtitle track as an array of maps with
+    ``name``, ``bold``, ``italic``, ``underline`` and ``strikeout``.
+    ``<flags>`` is ``primary`` (default) or ``secondary``.
+
+``sub-edit <index> <text> [<flags> [<style>]]``
+    Replace the text of a subtitle event that is currently displayed, and
+    optionally its style (by name, see ``sub-styles``). ``<index>``
+    is the 0-based position of the event in the ``sub-text/ass-full`` property,
+    and ``<text>`` is the new ASS event text (override tags and ``\N`` line
+    breaks are allowed). Works with all text subtitle formats, whether they are
+    external files or embedded in the video. The edit only changes the loaded
+    track in memory and is kept for as long as the track is loaded.
+
+    Secondary argument:
+
+    primary (default)
+        Edits the primary subtitles.
+    secondary
+        Edits the secondary subtitles.
+
+``sub-delete <index> [<flags>]``
+    Remove a subtitle event that is currently displayed from the loaded track.
+    ``<index>`` and ``<flags>`` are as for ``sub-edit``. The event stays
+    removed for as long as the track is loaded.
+
+``sub-event-bounds [<flags>]``
+    Return the screen rectangles of the subtitle events that are currently
+    displayed, in the same order as the ``sub-text/ass-full`` property, as an
+    array of maps with ``x0``, ``y0``, ``x1`` and ``y1`` in OSD pixels. Events
+    that are not drawn get an empty map. ``<flags>`` is ``primary`` (default)
+    or ``secondary``, like for ``sub-edit``.
+
 ``audio-add <url> [<flags> [<title> [<lang>]]]``
     Load the given audio file. See ``sub-add`` command.
 

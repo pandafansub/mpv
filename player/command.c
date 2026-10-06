@@ -6319,6 +6319,130 @@ static void cmd_playlist_play_index(void *p)
         mpctx->add_osd_seek_info |= OSD_SEEK_INFO_CURRENT_FILE;
 }
 
+static void cmd_sub_edit(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+    int track_ind = cmd->args[2].v.i;
+
+    struct track *track = mpctx->current_track[track_ind][STREAM_SUB];
+    struct dec_sub *sub = track ? track->d_sub : NULL;
+    double pts = mpctx->playback_pts;
+    if (!mpctx->playback_initialized || !sub || pts == MP_NOPTS_VALUE) {
+        cmd->success = false;
+        return;
+    }
+
+    struct sd_edit_event ev = {
+        .pts = pts,
+        .index = cmd->args[0].v.i,
+        .text = cmd->args[1].v.s,
+        .style = cmd->args[3].v.s,
+    };
+    if (sub_control(sub, SD_CTRL_EDIT_EVENT, &ev) != CONTROL_OK) {
+        MP_ERR(mpctx, "sub-edit: no editable subtitle event %d at the "
+               "current position.\n", ev.index);
+        cmd->success = false;
+        return;
+    }
+
+    redraw_subs(mpctx);
+    osd_changed(mpctx->osd);
+    mp_notify_property(mpctx, track_ind ? "secondary-sub-text" : "sub-text");
+}
+
+static void cmd_sub_delete(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+    int track_ind = cmd->args[1].v.i;
+
+    struct track *track = mpctx->current_track[track_ind][STREAM_SUB];
+    struct dec_sub *sub = track ? track->d_sub : NULL;
+    double pts = mpctx->playback_pts;
+    if (!mpctx->playback_initialized || !sub || pts == MP_NOPTS_VALUE) {
+        cmd->success = false;
+        return;
+    }
+
+    struct sd_edit_event ev = { .pts = pts, .index = cmd->args[0].v.i };
+    if (sub_control(sub, SD_CTRL_DELETE_EVENT, &ev) != CONTROL_OK) {
+        MP_ERR(mpctx, "sub-delete: no subtitle event %d at the current "
+               "position.\n", ev.index);
+        cmd->success = false;
+        return;
+    }
+
+    redraw_subs(mpctx);
+    osd_changed(mpctx->osd);
+    mp_notify_property(mpctx, track_ind ? "secondary-sub-text" : "sub-text");
+}
+
+static void cmd_sub_styles(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+    int track_ind = cmd->args[0].v.i;
+
+    struct track *track = mpctx->current_track[track_ind][STREAM_SUB];
+    struct dec_sub *sub = track ? track->d_sub : NULL;
+    void *tmp = talloc_new(NULL);
+    struct sd_styles s = { .ta_parent = tmp };
+    if (!sub || sub_control(sub, SD_CTRL_GET_STYLES, &s) != CONTROL_OK) {
+        talloc_free(tmp);
+        cmd->success = false;
+        return;
+    }
+
+    struct mpv_node *res = &cmd->result;
+    node_init(res, MPV_FORMAT_NODE_ARRAY, NULL);
+    for (int i = 0; i < s.num_styles; i++) {
+        struct sd_style_info *st = &s.styles[i];
+        struct mpv_node *e = node_array_add(res, MPV_FORMAT_NODE_MAP);
+        node_map_add_string(e, "name", st->name);
+        node_map_add_flag(e, "bold", st->bold);
+        node_map_add_flag(e, "italic", st->italic);
+        node_map_add_flag(e, "underline", st->underline);
+        node_map_add_flag(e, "strikeout", st->strikeout);
+    }
+    talloc_free(tmp);
+}
+
+static void cmd_sub_event_bounds(void *p)
+{
+    struct mp_cmd_ctx *cmd = p;
+    struct MPContext *mpctx = cmd->mpctx;
+    int track_ind = cmd->args[0].v.i;
+
+    struct track *track = mpctx->current_track[track_ind][STREAM_SUB];
+    struct dec_sub *sub = track ? track->d_sub : NULL;
+    double pts = mpctx->playback_pts;
+    if (!mpctx->playback_initialized || !sub || pts == MP_NOPTS_VALUE) {
+        cmd->success = false;
+        return;
+    }
+
+    struct sd_event_bounds b = { .pts = pts, .ta_parent = NULL };
+    if (sub_control(sub, SD_CTRL_EVENT_BOUNDS, &b) != CONTROL_OK) {
+        cmd->success = false;
+        return;
+    }
+
+    struct mpv_node *res = &cmd->result;
+    node_init(res, MPV_FORMAT_NODE_ARRAY, NULL);
+    for (int i = 0; i < b.num_rects; i++) {
+        struct mp_rect r = b.rects[i];
+        struct mpv_node *e = node_array_add(res, MPV_FORMAT_NODE_MAP);
+        if (r.x0 < r.x1) {
+            node_map_add_int64(e, "x0", r.x0);
+            node_map_add_int64(e, "y0", r.y0);
+            node_map_add_int64(e, "x1", r.x1);
+            node_map_add_int64(e, "y1", r.y1);
+        }
+    }
+    talloc_free(b.rects);
+}
+
 static void cmd_sub_step_seek(void *p)
 {
     struct mp_cmd_ctx *cmd = p;
@@ -7641,6 +7765,42 @@ const struct mp_cmd_def mp_cmds[] = {
     },
     { "playlist-shuffle", cmd_playlist_shuffle, },
     { "playlist-unshuffle", cmd_playlist_unshuffle, },
+    { "sub-edit", cmd_sub_edit,
+        {
+            {"index", OPT_INT(v.i)},
+            {"text", OPT_STRING(v.s)},
+            {"flags", OPT_CHOICE(v.i,
+                {"primary", 0},
+                {"secondary", 1}),
+                OPTDEF_INT(0)},
+            {"style", OPT_STRING(v.s), .flags = MP_CMD_OPT_ARG},
+        },
+    },
+    { "sub-delete", cmd_sub_delete,
+        {
+            {"index", OPT_INT(v.i)},
+            {"flags", OPT_CHOICE(v.i,
+                {"primary", 0},
+                {"secondary", 1}),
+                OPTDEF_INT(0)},
+        },
+    },
+    { "sub-styles", cmd_sub_styles,
+        {
+            {"flags", OPT_CHOICE(v.i,
+                {"primary", 0},
+                {"secondary", 1}),
+                OPTDEF_INT(0)},
+        },
+    },
+    { "sub-event-bounds", cmd_sub_event_bounds,
+        {
+            {"flags", OPT_CHOICE(v.i,
+                {"primary", 0},
+                {"secondary", 1}),
+                OPTDEF_INT(0)},
+        },
+    },
     { "sub-step", cmd_sub_step_seek,
         {
             {"skip", OPT_INT(v.i)},
