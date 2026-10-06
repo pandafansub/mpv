@@ -61,7 +61,7 @@ UP and DOWN
     Seek forward/backward 1 minute. Shift+arrow does a 5 second exact seek (see
     ``--hr-seek``).
 
-Ctrl+LEFT and Ctrl+RIGHT
+Ctrl+LEFT and Ctrl+RIGHT, a and d
     Seek to the previous/next subtitle. Subject to some restrictions and
     might not always work; see ``sub-seek`` command.
 
@@ -234,7 +234,7 @@ Shift+PGUP and Shift+PGDWN
 b
     Activate/deactivate debanding.
 
-d
+D (Shift+d)
     Cycle the deinterlacing filter.
 
 A
