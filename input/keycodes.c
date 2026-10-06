@@ -229,6 +229,10 @@ static const struct key_name key_names[] = {
     { MP_KEY_MOUSE_LEAVE, "MOUSE_LEAVE" },
     { MP_KEY_MOUSE_ENTER, "MOUSE_ENTER" },
 
+    { MP_KEY_SHIFT_TAP,   "SHIFT_TAP" },
+    { MP_KEY_CTRL_TAP,    "CTRL_TAP" },
+    { MP_KEY_ALT_TAP,     "ALT_TAP" },
+
     { MP_KEY_UNMAPPED,    "UNMAPPED" },
     { MP_KEY_ANY_UNICODE, "ANY_UNICODE" },
 

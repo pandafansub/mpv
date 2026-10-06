@@ -181,6 +181,11 @@ Comments on some symbolic names:
     Pseudo key emitted when closing the mpv window using the OS window manager
     (for example, by clicking the close button in the window title bar).
 
+``SHIFT_TAP``, ``CTRL_TAP``, ``ALT_TAP``
+    Pseudo keys emitted when ``Shift``, ``Ctrl`` or ``Alt`` is pressed and
+    released on its own, without any other key or mouse button in between.
+    A tap of ``Alt`` doesn't activate the window menu. Windows only.
+
 ``GAMEPAD_*``
     Keys emitted by the SDL gamepad backend.
 

@@ -230,6 +230,11 @@
 #define MP_INPUT_RELEASE_ALL    (MP_KEY_INTERN+6)
 // For mp_input_put_key(): release all touch points.
 #define MP_TOUCH_RELEASE_ALL    (MP_KEY_INTERN+7)
+// A modifier key pressed and released on its own, without any other key or
+// mouse button in between.
+#define MP_KEY_SHIFT_TAP        (MP_KEY_INTERN+8)
+#define MP_KEY_CTRL_TAP         (MP_KEY_INTERN+9)
+#define MP_KEY_ALT_TAP          (MP_KEY_INTERN+10)
 
 // Emit a command even on key-up (normally key-up is ignored). This means by
 // default they binding will be triggered on key-up instead of key-down.
